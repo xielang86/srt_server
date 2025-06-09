@@ -39,6 +39,7 @@ class ASRService:
     # )
 
     model_dir = model_config["model_dir"] 
+    self.front = WavFrontend(os.path.join(model_dir, "am.mvn"))
     self.model = SenseVoiceInferenceSession(
         os.path.join(model_dir, "embedding.npy"),
         os.path.join(model_dir,"sense-voice-encoder.rknn"),
@@ -50,22 +51,29 @@ class ASRService:
     # TODO(xl): thread unsafe
     self.vad = FSMNVad(model_dir)
 
-    
-  def recognize(self, audio_data, sample_rate=16000):
+  def post_process_result(self, input_str):
+    index = input_str.rfind("|>")
+    if index < -1 or index + 2 >= len(input_str):
+      return input_str
+    else:
+      return input_str[index + 2:-1]
+
+  def recognize(self, audio_data, audio_language, sample_rate=16000):
     """执行语音识别，返回文本结果"""
     try:
-      segments = vad.segments_offline(audio_data)
-      results = ""
+      segments = self.vad.segments_offline(audio_data)
+      result = ""
       for part in segments:
-        audio_feats = front.get_features(audio_data[part[0] * 16 : part[1] * 16])
-        asr_result = model(
+        audio_feats = self.front.get_features(audio_data[part[0] * 16 : part[1] * 16])
+        asr_result = self.model(
             audio_feats[None, ...],
-            language=languages[args.language],
-            use_itn=args.use_itn
+            language=languages[audio_language],
+            use_itn=True
         )
-        logging.info(f"[Channel {channel_id}] [{part[0] / 1000}s - {part[1] / 1000}s] {asr_result}")
-        result += rich_transcription_postprocess(ars_result)
-      self.vad.all_reset_detection()
+        logging.info(f"[[{part[0] / 1000}s - {part[1] / 1000}s] {asr_result}")
+        
+        result += self.post_process_result(asr_result)
+      self.vad.vad.all_reset_detection()
       return {"text": result, "success": True}
     except Exception as e:
       print(f"识别过程发生错误: {e}")
@@ -77,12 +85,14 @@ class ASRService:
       print("新连接已建立")
       audio_buffer = bytearray()
       end_received = False
+      audio_language = "auto"
       while not end_received:
         message = await websocket.recv()
         if isinstance(message, str):
           # 处理JSON消息（如结束标志）
           msg = json.loads(message)
           end_received = msg.get("end", False)
+          audio_language = msg.get("language", "auto")
         else:
           # 处理音频数据
           audio_buffer.extend(message)
@@ -90,7 +100,7 @@ class ASRService:
       audio_data = np.frombuffer(audio_buffer, dtype=np.float32)
       # 执行识别（使用线程池避免阻塞事件循环）
       loop = asyncio.get_event_loop()
-      result = await loop.run_in_executor(None, self.recognize, audio_data)
+      result = await loop.run_in_executor(None, self.recognize, audio_data, audio_language)
       # 发送识别结果给客户端
       await websocket.send(json.dumps(result))
             
@@ -109,7 +119,7 @@ class ASRService:
 
   async def _start_server(self, host, port):
     # 创建WebSocket服务器
-    server = await websockets.serve(self.handle_websocket, host, port)
+    server = await websockets.serve(self.handle_websocket, host, port, max_size=4*1024*1024)
 
     print(f"WebSocket服务器已启动，监听端口 {port}")
     # 保持服务器运行

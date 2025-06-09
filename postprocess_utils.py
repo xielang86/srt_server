@@ -416,8 +416,8 @@ def rich_transcription_postprocess(s):
             s_list[i] = s_list[i][1:]
         # else:
         cur_ent_event = get_event(s_list[i])
-        if get_emo(s_list[i]) != None and get_emo(s_list[i]) == get_emo(new_s):
-            new_s = new_s[:-1]
+        # if get_emo(s_list[i]) != None and get_emo(s_list[i]) == get_emo(new_s):
+        #     new_s = new_s[:-1]
         new_s += s_list[i].strip().lstrip()
     new_s = new_s.replace("The.", " ")
     return new_s.strip()
